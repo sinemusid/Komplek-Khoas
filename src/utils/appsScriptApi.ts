@@ -1,8 +1,7 @@
 import {
   APPS_SCRIPT_KAVLING_URL,
-  APPS_SCRIPT_URL,
   Gender,
-  GOOGLE_FORM_CONFIG,
+  GOOGLE_SHEET_CSV_URL,
   RegistrationFormValues,
   UserProfile,
 } from '../config/khoasConfig';
@@ -17,6 +16,45 @@ export interface LoginWargaResult {
 export interface DuplicateCheckResult {
   isDuplicate: boolean;
   error?: string;
+}
+
+export interface RegisterWargaResult {
+  ok: boolean;
+  profile?: UserProfile;
+  isDuplicate?: boolean;
+  error?: string;
+}
+
+export interface AppsScriptWriteResult {
+  ok: boolean;
+  idKavling?: string | null;
+  nomorRumah?: number;
+  jenisKelamin?: Gender;
+  error?: string;
+}
+
+/**
+ * Menambahkan cache-buster dinamis `&t=<timestamp>` pada URL CSV Google Sheet publik
+ * agar data terbaru dari Google Form maupun tab Daftar Web selalu dimuat segar.
+ */
+export function buildLiveSheetCsvUrl(
+  baseUrl: string = GOOGLE_SHEET_CSV_URL,
+  timestamp: number = Date.now()
+): string {
+  const separator = baseUrl.includes('?') ? '&' : '?';
+  return `${baseUrl}${separator}t=${timestamp}`;
+}
+
+function extractNestedObject(obj: Record<string, unknown>): Record<string, unknown> {
+  if (obj.user && typeof obj.user === 'object') return obj.user as Record<string, unknown>;
+  if (obj.data && typeof obj.data === 'object') return obj.data as Record<string, unknown>;
+  if (obj.warga && typeof obj.warga === 'object') return obj.warga as Record<string, unknown>;
+  return obj;
+}
+
+function extractMessage(obj: Record<string, unknown>, fallback: string): string {
+  const msg = String(obj.message ?? obj.error ?? obj.msg ?? '').trim();
+  return msg || fallback;
 }
 
 /**
@@ -44,12 +82,7 @@ export function normalizeLoginResponse(
     statusStr === 'error' ||
     statusStr === 'failed';
 
-  const nested =
-    (obj.data && typeof obj.data === 'object' ? (obj.data as Record<string, unknown>) : null) ??
-    (obj.user && typeof obj.user === 'object' ? (obj.user as Record<string, unknown>) : null) ??
-    (obj.warga && typeof obj.warga === 'object' ? (obj.warga as Record<string, unknown>) : null) ??
-    obj;
-
+  const nested = extractNestedObject(obj);
   const nama = String(nested.nama ?? nested.name ?? '').trim();
 
   if (explicitlyNotFound || !nama) {
@@ -96,9 +129,9 @@ export function normalizeDuplicateResponse(raw: unknown): DuplicateCheckResult {
   const obj = raw as Record<string, unknown>;
   const statusStr = String(obj.status ?? obj.result ?? '').toLowerCase();
   const isDuplicate =
+    obj.exists === true ||
     obj.duplicate === true ||
     obj.isDuplicate === true ||
-    obj.exists === true ||
     obj.found === true ||
     statusStr === 'duplicate' ||
     statusStr === 'exists' ||
@@ -107,11 +140,176 @@ export function normalizeDuplicateResponse(raw: unknown): DuplicateCheckResult {
   return { isDuplicate };
 }
 
-async function postAppsScriptJson(
-  payload: Record<string, unknown>,
-  url = APPS_SCRIPT_URL
-): Promise<unknown> {
-  const response = await fetch(url, {
+/**
+ * Menormalkan respons JSON dari Google Apps Script untuk aksi `register_warga`.
+ */
+export function normalizeRegisterResponse(
+  raw: unknown,
+  fallback: {
+    nama: string;
+    email: string;
+    wa: string;
+    kota: string;
+    instansi: string;
+    jenisKelamin: Gender;
+    idKavling?: string;
+    fallbackNomorRumah?: number;
+  }
+): RegisterWargaResult {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: 'Respons server pendaftaran tidak valid. Silakan coba lagi.',
+    };
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const statusStr = String(obj.status ?? obj.result ?? '').toLowerCase();
+
+  const isDuplicate =
+    obj.exists === true ||
+    obj.duplicate === true ||
+    obj.isDuplicate === true ||
+    statusStr === 'duplicate' ||
+    statusStr === 'exists' ||
+    statusStr === 'already_registered';
+
+  if (isDuplicate) {
+    return {
+      ok: false,
+      isDuplicate: true,
+      error: 'Email atau Nomor WhatsApp sudah terdaftar! Silakan masuk lewat tab Masuk Warga.',
+    };
+  }
+
+  const isSuccess =
+    statusStr === 'success' ||
+    statusStr === 'ok' ||
+    obj.success === true ||
+    obj.ok === true;
+
+  if (!isSuccess) {
+    return {
+      ok: false,
+      error: extractMessage(
+        obj,
+        'Gagal menyimpan pendaftaran ke server. Mohon periksa data lalu coba lagi.'
+      ),
+    };
+  }
+
+  const nested = extractNestedObject(obj);
+  const rawNomor = Number(
+    nested.nomorRumah ??
+      nested.nomor_rumah ??
+      obj.nomorRumah ??
+      obj.nomor_rumah ??
+      nested.houseNumber ??
+      fallback.fallbackNomorRumah ??
+      0
+  );
+  const rawKavling = String(
+    nested.idKavling ??
+      nested.id_kavling ??
+      obj.idKavling ??
+      obj.id_kavling ??
+      nested.kavling ??
+      fallback.idKavling ??
+      ''
+  ).trim();
+  const normalizedKav = rawKavling ? normalizeKavlingId(rawKavling) : '';
+  const jenisKelamin =
+    normalizeGender(
+      nested.jenisKelamin ?? nested.jenis_kelamin ?? obj.jenisKelamin ?? fallback.jenisKelamin
+    ) || fallback.jenisKelamin;
+
+  return {
+    ok: true,
+    profile: {
+      nama: String(nested.nama ?? obj.nama ?? fallback.nama).trim() || fallback.nama,
+      email: String(nested.email ?? obj.email ?? fallback.email).trim() || fallback.email,
+      wa: String(nested.wa ?? obj.wa ?? fallback.wa).trim() || fallback.wa,
+      kota: String(nested.kota ?? obj.kota ?? fallback.kota).trim() || fallback.kota,
+      instansi:
+        String(nested.instansi ?? obj.instansi ?? fallback.instansi).trim() || fallback.instansi,
+      nomorRumah:
+        Number.isFinite(rawNomor) && rawNomor > 0
+          ? Math.floor(rawNomor)
+          : fallback.fallbackNomorRumah ?? 0,
+      idKavling: normalizedKav || null,
+      jenisKelamin,
+    },
+  };
+}
+
+/**
+ * Menormalkan respons JSON untuk aksi tulis (`move_house`, `assign_kavling`, `update_profile`).
+ */
+export function normalizeWriteResponse(raw: unknown): AppsScriptWriteResult {
+  if (!raw || typeof raw !== 'object') {
+    return { ok: false, error: 'Respons server tidak valid.' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const statusStr = String(obj.status ?? obj.result ?? '').toLowerCase();
+  const isSuccess =
+    statusStr === 'success' ||
+    statusStr === 'ok' ||
+    obj.success === true ||
+    obj.ok === true;
+
+  if (!isSuccess) {
+    return {
+      ok: false,
+      error: extractMessage(obj, 'Gagal menyimpan perubahan ke server. Silakan coba lagi.'),
+    };
+  }
+
+  const nested = extractNestedObject(obj);
+  const rawKavling = String(
+    nested.idKavling ??
+      nested.newKavling ??
+      obj.idKavling ??
+      obj.newKavling ??
+      ''
+  ).trim();
+  const rawNomor = Number(nested.nomorRumah ?? obj.nomorRumah ?? 0);
+  const gender = normalizeGender(nested.jenisKelamin ?? obj.jenisKelamin ?? '');
+
+  return {
+    ok: true,
+    idKavling: rawKavling ? normalizeKavlingId(rawKavling) : undefined,
+    nomorRumah: Number.isFinite(rawNomor) && rawNomor > 0 ? Math.floor(rawNomor) : undefined,
+    jenisKelamin: gender || undefined,
+  };
+}
+
+/**
+ * Membangun payload standar untuk aksi `register_warga` ke Google Apps Script.
+ */
+export function buildRegisterWargaPayload(
+  values: RegistrationFormValues,
+  idKavling: string = ''
+): Record<string, string> {
+  return {
+    action: 'register_warga',
+    nama: values.nama.trim(),
+    usia: values.usia.trim(),
+    kota: values.kota.trim(),
+    instansi: values.instansi.trim(),
+    email: values.email.trim(),
+    wa: values.wa.trim(),
+    sumber: values.sumber.trim() || 'Website Komplek',
+    jenisKelamin: values.jenisKelamin,
+    idKavling: idKavling ? normalizeKavlingId(idKavling) : '',
+  };
+}
+
+/**
+ * Mengirim POST JSON ke APPS_SCRIPT_KAVLING_URL tanpa `mode: 'no-cors'`
+ * agar respons JSON dari Google Apps Script dapat dibaca akurat di Vercel maupun localhost.
+ */
+async function postAppsScriptJson(payload: Record<string, unknown>): Promise<unknown> {
+  const response = await fetch(APPS_SCRIPT_KAVLING_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     redirect: 'follow',
@@ -122,32 +320,7 @@ async function postAppsScriptJson(
     throw new Error(`HTTP ${response.status}`);
   }
 
-  const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { raw: text };
-  }
-}
-
-async function postAppsScriptWrite(payload: Record<string, unknown>): Promise<void> {
-  const body = JSON.stringify(payload);
-  try {
-    await fetch(APPS_SCRIPT_KAVLING_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      redirect: 'follow',
-      body,
-    });
-  } catch {
-    // Fallback no-cors bila browser memblokir bacaan respons lintas-asal pada aksi tulis
-    await fetch(APPS_SCRIPT_KAVLING_URL, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body,
-    });
-  }
+  return response.json();
 }
 
 export async function loginWargaApi(email: string, wa: string): Promise<LoginWargaResult> {
@@ -182,23 +355,60 @@ export async function checkDuplicateApi(email: string, wa: string): Promise<Dupl
   }
 }
 
-/**
- * Mengirim data registrasi ke Google Form (hanya 6 field asli; Jenis Kelamin TIDAK dikirim ke Google Form).
- */
-export async function submitGoogleFormRegistration(values: RegistrationFormValues): Promise<void> {
-  const formData = new FormData();
-  formData.append(GOOGLE_FORM_CONFIG.entries.nama, values.nama.trim());
-  formData.append(GOOGLE_FORM_CONFIG.entries.usia, values.usia.trim());
-  formData.append(GOOGLE_FORM_CONFIG.entries.kota, values.kota.trim());
-  formData.append(GOOGLE_FORM_CONFIG.entries.instansi, values.instansi.trim());
-  formData.append(GOOGLE_FORM_CONFIG.entries.email, values.email.trim());
-  formData.append(GOOGLE_FORM_CONFIG.entries.wa, values.wa.trim());
+export async function registerWargaApi(
+  values: RegistrationFormValues,
+  idKavling: string = '',
+  fallbackNomorRumah: number = 0
+): Promise<RegisterWargaResult> {
+  try {
+    const payload = buildRegisterWargaPayload(values, idKavling);
+    const raw = await postAppsScriptJson(payload);
+    return normalizeRegisterResponse(raw, {
+      nama: payload.nama,
+      email: payload.email,
+      wa: payload.wa,
+      kota: payload.kota,
+      instansi: payload.instansi,
+      jenisKelamin: values.jenisKelamin,
+      idKavling: payload.idKavling,
+      fallbackNomorRumah,
+    });
+  } catch {
+    return {
+      ok: false,
+      error: 'Gagal mengirim data pendaftaran ke server Apps Script. Periksa koneksi lalu coba lagi.',
+    };
+  }
+}
 
-  await fetch(GOOGLE_FORM_CONFIG.actionUrl, {
-    method: 'POST',
-    mode: 'no-cors',
-    body: formData,
-  });
+export async function moveHouseApi(payload: {
+  nama: string;
+  email: string;
+  wa: string;
+  oldKavling?: string | null;
+  newKavling: string;
+  jenisKelamin?: Gender;
+}): Promise<AppsScriptWriteResult> {
+  try {
+    const normalizedNew = normalizeKavlingId(payload.newKavling);
+    const normalizedOld = payload.oldKavling ? normalizeKavlingId(payload.oldKavling) : '';
+    const raw = await postAppsScriptJson({
+      action: 'move_house',
+      email: payload.email.trim(),
+      wa: payload.wa.trim(),
+      nama: payload.nama.trim(),
+      idKavling: normalizedNew,
+      newKavling: normalizedNew,
+      oldKavling: normalizedOld,
+      jenisKelamin: payload.jenisKelamin ?? '',
+    });
+    return normalizeWriteResponse(raw);
+  } catch {
+    return {
+      ok: false,
+      error: 'Gagal menyimpan lokasi rumah ke server. Periksa koneksi internet lalu coba lagi.',
+    };
+  }
 }
 
 export async function assignKavlingApi(payload: {
@@ -207,31 +417,14 @@ export async function assignKavlingApi(payload: {
   wa: string;
   idKavling: string;
   jenisKelamin?: Gender;
-}): Promise<void> {
-  await postAppsScriptWrite({
-    action: 'assign_kavling',
+}): Promise<AppsScriptWriteResult> {
+  return moveHouseApi({
     nama: payload.nama,
     email: payload.email,
     wa: payload.wa,
-    idKavling: payload.idKavling,
-    jenisKelamin: payload.jenisKelamin ?? '',
-  });
-}
-
-export async function moveHouseApi(payload: {
-  nama: string;
-  email: string;
-  wa: string;
-  oldKavling: string;
-  newKavling: string;
-}): Promise<void> {
-  await postAppsScriptWrite({
-    action: 'move_house',
-    nama: payload.nama,
-    email: payload.email,
-    wa: payload.wa,
-    oldKavling: payload.oldKavling,
-    newKavling: payload.newKavling,
+    oldKavling: '',
+    newKavling: payload.idKavling,
+    jenisKelamin: payload.jenisKelamin,
   });
 }
 
@@ -240,12 +433,20 @@ export async function updateProfileApi(payload: {
   wa: string;
   nama: string;
   jenisKelamin: Gender;
-}): Promise<void> {
-  await postAppsScriptWrite({
-    action: 'update_profile',
-    email: payload.email,
-    wa: payload.wa,
-    nama: payload.nama,
-    jenisKelamin: payload.jenisKelamin,
-  });
+}): Promise<AppsScriptWriteResult> {
+  try {
+    const raw = await postAppsScriptJson({
+      action: 'update_profile',
+      email: payload.email.trim(),
+      wa: payload.wa.trim(),
+      nama: payload.nama.trim(),
+      jenisKelamin: payload.jenisKelamin,
+    });
+    return normalizeWriteResponse(raw);
+  } catch {
+    return {
+      ok: false,
+      error: 'Gagal memperbarui profil jenis kelamin ke server. Silakan coba lagi.',
+    };
+  }
 }

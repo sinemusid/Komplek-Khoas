@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowRight, CheckCircle2, Home, Loader2, X } from 'lucide-react';
+import { AlertCircle, ArrowRight, CheckCircle2, Home, Loader2, X } from 'lucide-react';
 import { UserProfile } from '../config/khoasConfig';
 
 export interface HouseConfirmRequest {
@@ -22,10 +22,12 @@ export function ConfirmHouseModal({
   onConfirm,
 }: ConfirmHouseModalProps) {
   const [isSaving, setIsSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!request) return;
     setIsSaving(false);
+    setErrorMsg(null);
   }, [request]);
 
   useEffect(() => {
@@ -44,8 +46,15 @@ export function ConfirmHouseModal({
 
   const handleConfirm = async () => {
     setIsSaving(true);
+    setErrorMsg(null);
     try {
       await onConfirm(request);
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error && err.message
+          ? err.message
+          : 'Gagal menyimpan lokasi rumah ke server. Silakan coba lagi.'
+      );
     } finally {
       setIsSaving(false);
     }
@@ -118,6 +127,16 @@ export function ConfirmHouseModal({
               sebagai{' '}
               <strong className="font-mono text-amber-700">Rumah {formattedNum}</strong> milikmu?
             </p>
+          )}
+
+          {errorMsg && (
+            <div
+              role="alert"
+              className="flex items-start gap-2 rounded-xl bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-800 ring-1 ring-rose-200"
+            >
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+              <span>{errorMsg}</span>
+            </div>
           )}
 
           <div className="flex items-center justify-end gap-2.5 pt-2">

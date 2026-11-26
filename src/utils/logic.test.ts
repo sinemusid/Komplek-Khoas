@@ -13,7 +13,14 @@ import {
   searchResidents,
   syncProfileWithResidents,
 } from './sheetParser';
-import { normalizeDuplicateResponse, normalizeLoginResponse } from './appsScriptApi';
+import {
+  buildLiveSheetCsvUrl,
+  buildRegisterWargaPayload,
+  normalizeDuplicateResponse,
+  normalizeLoginResponse,
+  normalizeRegisterResponse,
+  normalizeWriteResponse,
+} from './appsScriptApi';
 import { getEventCountdown } from './countdown';
 import { FALLBACK_WIB_TIMINGS, getNextPrayerInfo } from './prayerTimes';
 import {
@@ -474,5 +481,80 @@ test('welcomePopup shows on first entry, stays hidden within 10 min absence, and
   assert.equal(parseStoredTimestamp('-100'), null);
   assert.equal(parseStoredTimestamp(String(now)), now);
 });
+
+test('Apps Script register_warga payload, JSON normalizers, and cache-busted CSV URL work cleanly', () => {
+  const csvUrl = buildLiveSheetCsvUrl(
+    'https://docs.google.com/spreadsheets/d/e/test/pub?gid=1874013273&single=true&output=csv',
+    1700000000000
+  );
+  assert.ok(csvUrl.endsWith('&t=1700000000000'));
+
+  const payload = buildRegisterWargaPayload(
+    {
+      nama: '  Alya Zahra  ',
+      usia: '20',
+      kota: 'Bandung',
+      instansi: 'ITB',
+      email: 'alya@example.com',
+      wa: '081234567890',
+      jenisKelamin: 'Perempuan',
+      sumber: '',
+    },
+    'b-9'
+  );
+  assert.equal(payload.action, 'register_warga');
+  assert.equal(payload.nama, 'Alya Zahra');
+  assert.equal(payload.sumber, 'Website Komplek');
+  assert.equal(payload.jenisKelamin, 'Perempuan');
+  assert.equal(payload.idKavling, 'B-09');
+
+  const regOk = normalizeRegisterResponse(
+    {
+      status: 'success',
+      user: {
+        nomorRumah: 59,
+        nama: 'Alya Zahra',
+        kota: 'Bandung',
+        instansi: 'ITB',
+        email: 'alya@example.com',
+        wa: '081234567890',
+        jenisKelamin: 'Perempuan',
+        idKavling: 'b-9',
+      },
+    },
+    {
+      nama: 'Alya Zahra',
+      email: 'alya@example.com',
+      wa: '081234567890',
+      kota: 'Bandung',
+      instansi: 'ITB',
+      jenisKelamin: 'Perempuan',
+      idKavling: 'B-09',
+    }
+  );
+  assert.equal(regOk.ok, true);
+  assert.equal(regOk.profile?.nomorRumah, 59);
+  assert.equal(regOk.profile?.idKavling, 'B-09');
+  assert.equal(regOk.profile?.jenisKelamin, 'Perempuan');
+
+  const regDup = normalizeRegisterResponse(
+    { status: 'duplicate', exists: true },
+    {
+      nama: 'Alya',
+      email: 'alya@example.com',
+      wa: '0812',
+      kota: 'Bandung',
+      instansi: 'ITB',
+      jenisKelamin: 'Perempuan',
+    }
+  );
+  assert.equal(regDup.ok, false);
+  assert.equal(regDup.isDuplicate, true);
+
+  assert.equal(normalizeDuplicateResponse({ exists: true }).isDuplicate, true);
+  assert.equal(normalizeWriteResponse({ status: 'success', idKavling: 'c-5', nomorRumah: 59 }).idKavling, 'C-05');
+  assert.equal(normalizeWriteResponse({ status: 'error', message: 'Kavling sudah terisi' }).ok, false);
+});
+
 
 

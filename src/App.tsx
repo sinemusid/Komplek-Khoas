@@ -21,7 +21,12 @@ import { ResidentCardModal } from './components/ResidentCardModal';
 import { ShareModal } from './components/ShareModal';
 import { WelcomeEventModal } from './components/WelcomeEventModal';
 import { WhatsAppGroupModal } from './components/WhatsAppGroupModal';
-import { assignKavlingApi, moveHouseApi, updateProfileApi } from './utils/appsScriptApi';
+import {
+  assignKavlingApi,
+  buildLiveSheetCsvUrl,
+  moveHouseApi,
+  updateProfileApi,
+} from './utils/appsScriptApi';
 import { lofiAudio } from './utils/lofiAudio';
 import {
   readWelcomePopupLastExit,
@@ -225,12 +230,13 @@ export default function App() {
     [lightingOverride, wibInfo]
   );
 
-  // Fetch Live CSV Data from Google Sheets (5 columns: Nama, Kota, Instansi, ID Kavling, Jenis Kelamin)
+  // Fetch Live CSV Data from Google Sheets with dynamic cache-buster `&t=...`
+  // (5 columns: Nama, Kota, Instansi, ID Kavling, Jenis Kelamin)
   const fetchLiveSheet = useCallback(async () => {
     setIsRefreshing(true);
     setDataError(null);
     try {
-      const response = await fetch(GOOGLE_SHEET_CSV_URL, {
+      const response = await fetch(buildLiveSheetCsvUrl(GOOGLE_SHEET_CSV_URL), {
         cache: 'no-store',
       });
       if (!response.ok) {
@@ -409,26 +415,71 @@ export default function App() {
     [byKavling, focusKavling, occupiedCount, pendingKavlingId, residents, updateUserProfile, viewMode]
   );
 
-  // Register success from AccountGatewayModal (Auto-Login + Popup Grup WA + Mode Pilih Tempat Tinggal)
+  // Register success from AccountGatewayModal (`register_warga` via Apps Script)
   const handleRegisterSuccess = useCallback(
     (newProfile: UserProfile) => {
-      updateUserProfile(newProfile);
+      const resolvedNomor =
+        newProfile.nomorRumah > 0
+          ? newProfile.nomorRumah
+          : Math.min(MAX_KAVLING_QUOTA, occupiedCount + 1);
+
+      const finalProfile: UserProfile = {
+        ...newProfile,
+        nomorRumah: resolvedNomor,
+      };
+
+      updateUserProfile(finalProfile);
       setAccountModalOpen(false);
       if (viewMode !== 'map') {
         setViewMode('map');
       }
-      setMapMode('pick_house');
-      setToastMessage(`Pendaftaran berhasil! Halo ${newProfile.nama}, yuk masuk Grup WA & pilih rumahmu.`);
 
-      if (pendingKavlingId && !byKavling[pendingKavlingId]) {
-        setDeferredAssignLotId(pendingKavlingId);
-      } else {
+      if (finalProfile.idKavling) {
+        // Pendaftar sudah memiliki kavling (misal dari klik kavling kosong atau respons server)
+        setLocalOverrides((prev) => {
+          const filtered = prev.filter(
+            (o) => o.nama.trim().toLowerCase() !== finalProfile.nama.trim().toLowerCase()
+          );
+          const next: LocalKavlingOverride[] = [
+            ...filtered,
+            {
+              nama: finalProfile.nama,
+              kota: finalProfile.kota,
+              instansi: finalProfile.instansi,
+              oldKavling: null,
+              newKavling: finalProfile.idKavling,
+              nomorRumah: resolvedNomor,
+              jenisKelamin: finalProfile.jenisKelamin,
+            },
+          ];
+          saveStoredOverrides(next);
+          return next;
+        });
+
+        const formattedNum = `#${String(resolvedNomor).padStart(3, '0')}`;
+        setMapMode('browse');
         setDeferredAssignLotId(null);
+        setToastMessage(
+          `Pendaftaran berhasil! Selamat datang ${finalProfile.nama}, kamu menempati Kavling ${finalProfile.idKavling} (${formattedNum}).`
+        );
+        focusKavling(finalProfile.idKavling);
+      } else {
+        // Belum memilih kavling -> aktifkan Mode Pilih Tempat Tinggal di peta
+        setMapMode('pick_house');
+        setToastMessage(
+          `Pendaftaran berhasil! Halo ${finalProfile.nama}, yuk masuk Grup WA & pilih rumahmu di peta.`
+        );
+        if (pendingKavlingId && !byKavling[pendingKavlingId]) {
+          setDeferredAssignLotId(pendingKavlingId);
+        } else {
+          setDeferredAssignLotId(null);
+        }
       }
+
       setPendingKavlingId(null);
       setWaGroupPopupOpen(true);
     },
-    [byKavling, pendingKavlingId, updateUserProfile, viewMode]
+    [byKavling, focusKavling, occupiedCount, pendingKavlingId, updateUserProfile, viewMode]
   );
 
   const handleCloseWaGroupPopup = useCallback(() => {
@@ -447,12 +498,18 @@ export default function App() {
     async (jenisKelamin: Gender) => {
       if (!userProfile) return;
 
-      await updateProfileApi({
+      const res = await updateProfileApi({
         email: userProfile.email,
         wa: userProfile.wa,
         nama: userProfile.nama,
         jenisKelamin,
       });
+
+      if (!res.ok) {
+        throw new Error(
+          res.error ?? 'Gagal memperbarui jenis kelamin ke server. Silakan coba lagi.'
+        );
+      }
 
       const updatedProfile: UserProfile = {
         ...userProfile,
@@ -489,23 +546,34 @@ export default function App() {
     [updateUserProfile, userProfile]
   );
 
-  // Confirm assign_kavling or move_house
+  // Confirm pilih rumah / pindah rumah via Apps Script (`move_house`)
   const handleConfirmHouse = useCallback(
     async (request: HouseConfirmRequest) => {
       if (!userProfile) return;
 
       if (request.type === 'move' && request.oldKavlingId) {
-        await moveHouseApi({
+        const res = await moveHouseApi({
           nama: userProfile.nama,
           email: userProfile.email,
           wa: userProfile.wa,
           oldKavling: request.oldKavlingId,
           newKavling: request.targetKavlingId,
+          jenisKelamin: userProfile.jenisKelamin ?? '',
         });
+
+        if (!res.ok) {
+          throw new Error(
+            res.error ?? 'Gagal memindahkan kavling di server. Silakan coba lagi.'
+          );
+        }
+
+        const resolvedKavling = res.idKavling || request.targetKavlingId;
+        const resolvedNum = res.nomorRumah || userProfile.nomorRumah;
 
         const updatedProfile: UserProfile = {
           ...userProfile,
-          idKavling: request.targetKavlingId,
+          nomorRumah: resolvedNum,
+          idKavling: resolvedKavling,
         };
         updateUserProfile(updatedProfile);
 
@@ -520,8 +588,8 @@ export default function App() {
               kota: userProfile.kota,
               instansi: userProfile.instansi,
               oldKavling: request.oldKavlingId ?? null,
-              newKavling: request.targetKavlingId,
-              nomorRumah: userProfile.nomorRumah,
+              newKavling: resolvedKavling,
+              nomorRumah: resolvedNum,
               jenisKelamin: userProfile.jenisKelamin,
             },
           ];
@@ -532,11 +600,11 @@ export default function App() {
         setConfirmRequest(null);
         setMapMode('browse');
         setToastMessage(
-          `Berhasil pindah dari Kavling ${request.oldKavlingId} ke Kavling ${request.targetKavlingId}!`
+          `Berhasil pindah dari Kavling ${request.oldKavlingId} ke Kavling ${resolvedKavling}!`
         );
-        focusKavling(request.targetKavlingId);
+        focusKavling(resolvedKavling);
       } else {
-        await assignKavlingApi({
+        const res = await assignKavlingApi({
           nama: userProfile.nama,
           email: userProfile.email,
           wa: userProfile.wa,
@@ -544,11 +612,19 @@ export default function App() {
           jenisKelamin: userProfile.jenisKelamin ?? '',
         });
 
-        const assignedHouseNum = userProfile.nomorRumah || Math.min(MAX_KAVLING_QUOTA, occupiedCount + 1);
+        if (!res.ok) {
+          throw new Error(
+            res.error ?? 'Gagal menyimpan pilihan kavling ke server. Silakan coba lagi.'
+          );
+        }
+
+        const resolvedKavling = res.idKavling || request.targetKavlingId;
+        const assignedHouseNum =
+          res.nomorRumah || userProfile.nomorRumah || Math.min(MAX_KAVLING_QUOTA, occupiedCount + 1);
         const updatedProfile: UserProfile = {
           ...userProfile,
           nomorRumah: assignedHouseNum,
-          idKavling: request.targetKavlingId,
+          idKavling: resolvedKavling,
         };
         updateUserProfile(updatedProfile);
 
@@ -563,7 +639,7 @@ export default function App() {
               kota: userProfile.kota,
               instansi: userProfile.instansi,
               oldKavling: null,
-              newKavling: request.targetKavlingId,
+              newKavling: resolvedKavling,
               nomorRumah: assignedHouseNum,
               jenisKelamin: userProfile.jenisKelamin,
             },
@@ -576,9 +652,9 @@ export default function App() {
         setConfirmRequest(null);
         setMapMode('browse');
         setToastMessage(
-          `Selamat! Kamu resmi menempati Kavling ${request.targetKavlingId} sebagai Rumah ${formattedNum}`
+          `Selamat! Kamu resmi menempati Kavling ${resolvedKavling} sebagai Rumah ${formattedNum}`
         );
-        focusKavling(request.targetKavlingId);
+        focusKavling(resolvedKavling);
       }
     },
     [focusKavling, occupiedCount, updateUserProfile, userProfile]

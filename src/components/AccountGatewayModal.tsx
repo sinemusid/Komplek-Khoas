@@ -13,7 +13,7 @@ import { Gender, MAX_KAVLING_QUOTA, RegistrationFormValues, UserProfile } from '
 import {
   checkDuplicateApi,
   loginWargaApi,
-  submitGoogleFormRegistration,
+  registerWargaApi,
 } from '../utils/appsScriptApi';
 import { CitizenAvatarSvg } from './CitizenAvatarSvg';
 
@@ -29,6 +29,14 @@ interface AccountGatewayModalProps {
   onRegisterSuccess: (profile: UserProfile) => void;
 }
 
+const SUMBER_OPTIONS = [
+  'Website Komplek',
+  'Instagram',
+  'TikTok',
+  'WhatsApp / Teman',
+  'Komunitas / Sekolah',
+] as const;
+
 const EMPTY_REGISTER: RegistrationFormValues = {
   nama: '',
   usia: '',
@@ -37,6 +45,7 @@ const EMPTY_REGISTER: RegistrationFormValues = {
   email: '',
   wa: '',
   jenisKelamin: '',
+  sumber: 'Website Komplek',
 };
 
 export function AccountGatewayModal({
@@ -160,6 +169,7 @@ export function AccountGatewayModal({
     const email = regValues.email.trim();
     const wa = regValues.wa.trim();
     const jenisKelamin: Gender = regValues.jenisKelamin;
+    const sumber = regValues.sumber.trim() || 'Website Komplek';
 
     if (!nama || !usia || !kota || !instansi || !email || !wa || !jenisKelamin) {
       setRegError('Mohon lengkapi seluruh kolom formulir termasuk Jenis Kelamin.');
@@ -177,7 +187,7 @@ export function AccountGatewayModal({
     setRegError(null);
     setRegDuplicate(false);
 
-    // Langkah 1: Cegah daftar ganda lewat Apps Script check_duplicate
+    // Langkah 1: Cegah daftar ganda lewat Apps Script `check_duplicate`
     const dupCheck = await checkDuplicateApi(email, wa);
     if (dupCheck.error) {
       setRegBusy(false);
@@ -188,34 +198,47 @@ export function AccountGatewayModal({
     if (dupCheck.isDuplicate) {
       setRegBusy(false);
       setRegDuplicate(true);
-      setRegError('Email atau No. WhatsApp ini sudah terdaftar sebagai warga Pre-Launch.');
+      setLoginEmail(email);
+      setLoginWa(wa);
+      setLoginNotFound(false);
+      setLoginError(
+        'Email atau Nomor WhatsApp sudah terdaftar! Silakan masuk lewat tab Masuk Warga.'
+      );
+      setActiveTab('login');
       return;
     }
 
-    // Langkah 2: Kirim formulir ke Google Form (mode no-cors; Jenis Kelamin tidak dikirim ke Google Form)
-    try {
-      await submitGoogleFormRegistration({ nama, usia, kota, instansi, email, wa, jenisKelamin });
-    } catch {
-      setRegBusy(false);
-      setRegError('Terjadi kendala saat mengirim formulir pendaftaran. Silakan coba lagi.');
-      return;
-    }
-
-    // Langkah 3: Auto-Login dengan idKavling: null & nomorRumah = occupiedCount + 1
-    const newProfile: UserProfile = {
-      nama,
-      email,
-      wa,
-      kota,
-      instansi,
-      nomorRumah: Math.min(MAX_KAVLING_QUOTA, occupiedCount + 1),
-      idKavling: null,
-      jenisKelamin,
-    };
+    // Langkah 2: Simpan pendaftar baru langsung ke Apps Script (`action: "register_warga"`)
+    const regResult = await registerWargaApi(
+      { nama, usia, kota, instansi, email, wa, jenisKelamin, sumber },
+      pendingKavlingId ?? '',
+      Math.min(MAX_KAVLING_QUOTA, occupiedCount + 1)
+    );
 
     setRegBusy(false);
+
+    if (regResult.isDuplicate) {
+      setRegDuplicate(true);
+      setLoginEmail(email);
+      setLoginWa(wa);
+      setLoginNotFound(false);
+      setLoginError(
+        'Email atau Nomor WhatsApp sudah terdaftar! Silakan masuk lewat tab Masuk Warga.'
+      );
+      setActiveTab('login');
+      return;
+    }
+
+    if (!regResult.ok || !regResult.profile) {
+      setRegError(
+        regResult.error ?? 'Gagal menyimpan pendaftaran. Silakan periksa koneksi lalu coba lagi.'
+      );
+      return;
+    }
+
+    // Langkah 3: Auto-Login dengan profil dari respons Apps Script
     setRegValues(EMPTY_REGISTER);
-    onRegisterSuccess(newProfile);
+    onRegisterSuccess(regResult.profile);
   };
 
   return (
@@ -615,6 +638,25 @@ export function AccountGatewayModal({
                   className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm tabular-nums text-slate-900 placeholder:text-slate-400 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-400/50 disabled:bg-slate-50"
                 />
               </div>
+            </div>
+
+            <div>
+              <label htmlFor="reg-sumber" className="block text-xs font-semibold text-slate-700">
+                Tahu Event Ini Dari Mana?
+              </label>
+              <select
+                id="reg-sumber"
+                value={regValues.sumber}
+                onChange={(e) => setRegValues((p) => ({ ...p, sumber: e.target.value }))}
+                disabled={regBusy || isQuotaFull}
+                className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-400/50 disabled:bg-slate-50"
+              >
+                {SUMBER_OPTIONS.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <p className="text-[11px] leading-relaxed text-slate-500">

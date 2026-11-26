@@ -43,10 +43,12 @@ export function ProfilePanelModal({
 }: ProfilePanelModalProps) {
   const [selectedGender, setSelectedGender] = useState<Gender>(profile?.jenisKelamin ?? '');
   const [savingGender, setSavingGender] = useState(false);
+  const [genderError, setGenderError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isOpen || !profile) return;
     setSelectedGender(profile.jenisKelamin ?? '');
+    setGenderError(null);
   }, [isOpen, profile]);
 
   useEffect(() => {
@@ -69,8 +71,15 @@ export function ProfilePanelModal({
   const handleSaveGender = async () => {
     if (!selectedGender || savingGender) return;
     setSavingGender(true);
+    setGenderError(null);
     try {
       await onUpdateGender(selectedGender);
+    } catch (err) {
+      setGenderError(
+        err instanceof Error && err.message
+          ? err.message
+          : 'Gagal memperbarui jenis kelamin. Silakan coba lagi.'
+      );
     } finally {
       setSavingGender(false);
     }
@@ -215,6 +224,12 @@ export function ProfilePanelModal({
                 <span>{currentGender ? `Tersimpan (${currentGender})` : 'Pilih & Simpan'}</span>
               )}
             </button>
+
+            {genderError && (
+              <p role="alert" className="mt-2 text-[11px] font-semibold text-rose-600">
+                {genderError}
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-3 border-b border-slate-100 pb-4 text-sm">

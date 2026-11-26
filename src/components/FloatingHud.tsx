@@ -362,7 +362,7 @@ export function FloatingHud({
                       }`}
                     >
                       {userProfile.idKavling
-                        ? `Rumah ${userHouseNumStr} • ${userProfile.idKavling}`
+                        ? `Rumah ${userHouseNumStr} • Kavling ${userProfile.idKavling}`
                         : 'Belum Pilih Rumah'}
                     </span>
                   </span>
