@@ -1,0 +1,6 @@
+{
+  "name": "Perumahan Warga Pre-Launch Komik Khoas",
+  "description": "Peta virtual interaktif 500 kavling dan Auditorium Pre-Launch Komik Khoas dengan siklus siang-malam WIB real-time, warga berlalu-lalang, dan pendaftaran langsung.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

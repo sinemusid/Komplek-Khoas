@@ -1,0 +1,123 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    font-family: var(--font-sans);
+    touch-action: none;
+  }
+}
+
+/* Smooth GPU-accelerated map animations */
+@keyframes citizen-bob {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-2.5px);
+  }
+}
+
+@keyframes house-pulse-ring {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.9;
+  }
+  70% {
+    transform: scale(1.22);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.22);
+    opacity: 0;
+  }
+}
+
+@keyframes stage-beam-sway {
+  0%, 100% {
+    transform: rotate(-4deg);
+    opacity: 0.65;
+  }
+  50% {
+    transform: rotate(4deg);
+    opacity: 0.88;
+  }
+}
+
+@keyframes stage-beam-sway-alt {
+  0%, 100% {
+    transform: rotate(5deg);
+    opacity: 0.58;
+  }
+  50% {
+    transform: rotate(-5deg);
+    opacity: 0.82;
+  }
+}
+
+@keyframes subtle-float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes float-badge {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+.animate-citizen-bob {
+  animation: citizen-bob 0.42s ease-in-out infinite;
+}
+
+.animate-house-pulse {
+  animation: house-pulse-ring 1.6s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+.animate-stage-beam {
+  animation: stage-beam-sway 7s ease-in-out infinite;
+  transform-origin: top center;
+}
+
+.animate-stage-beam-alt {
+  animation: stage-beam-sway-alt 8.5s ease-in-out infinite;
+  transform-origin: top center;
+}
+
+.animate-subtle-float {
+  animation: subtle-float 3.2s ease-in-out infinite;
+}
+
+.animate-float-badge {
+  animation: float-badge 2.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-citizen-bob,
+  .animate-house-pulse,
+  .animate-stage-beam,
+  .animate-stage-beam-alt,
+  .animate-subtle-float,
+  .animate-float-badge {
+    animation: none !important;
+  }
+}
